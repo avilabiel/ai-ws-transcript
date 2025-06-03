@@ -1,0 +1,18 @@
+{
+  "name": "krisp-transcription-poc",
+  "version": "1.0.0",
+  "description": "POC for Krisp + WebSocket + OpenAI live transcription",
+  "main": "server.js",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.18.2",
+    "openai": "^5.1.0",
+    "ws": "^8.13.0"
+  }
+}
