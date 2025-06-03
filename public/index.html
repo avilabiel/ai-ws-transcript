@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Krisp Meeting Transcriber</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 2rem;
+        background: #f8f9fa;
+      }
+      #transcript {
+        white-space: pre-wrap;
+        margin-top: 1rem;
+        background: #e9ecef;
+        padding: 1rem;
+        border-radius: 8px;
+        font-size: 1.1rem;
+      }
+      button {
+        padding: 0.6rem 1rem;
+        font-size: 1rem;
+        margin-right: 1rem;
+      }
+      .status {
+        margin: 1rem 0;
+        padding: 0.5rem;
+        border-radius: 4px;
+      }
+      .error {
+        background: #ffebee;
+        color: #c62828;
+      }
+      .success {
+        background: #e8f5e9;
+        color: #2e7d32;
+      }
+      .controls {
+        margin: 1rem 0;
+        padding: 1rem;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      select {
+        padding: 0.5rem;
+        margin: 0.5rem 0;
+        width: 300px;
+      }
+      .toggle {
+        margin: 1rem 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Audio Transcription</h1>
+    <div class="controls">
+      <div class="toggle">
+        <label>
+          <input type="checkbox" id="useKrisp" />
+          Use Krisp SDK (if available)
+        </label>
+      </div>
+      <div id="micControls">
+        <select id="deviceSelect">
+          <option value="">Select audio input device...</option>
+        </select>
+      </div>
+    </div>
+    <div id="status" class="status">Waiting to connect...</div>
+    <button id="startButton">Start Transcription</button>
+    <button id="stopButton" disabled>Stop</button>
+    <div id="transcript">Waiting for audio...</div>
+
+    <script>
+      let socket;
+      let streamId = null;
+      let audioContext;
+      let source;
+      let processor;
+      let mediaStream;
+
+      // Populate audio input devices
+      async function populateDeviceList() {
+        try {
+          console.log("Starting device enumeration...");
+
+          // First request microphone permission
+          console.log("Requesting microphone permission...");
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+          console.log("Microphone permission granted");
+
+          // Stop the temporary stream
+          stream.getTracks().forEach((track) => track.stop());
+
+          // Now enumerate devices
+          console.log("Enumerating devices...");
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          console.log("All devices:", devices);
+
+          const audioInputs = devices.filter(
+            (device) => device.kind === "audioinput"
+          );
+          console.log("Audio input devices:", audioInputs);
+
+          const select = document.getElementById("deviceSelect");
+
+          // Clear existing options
+          select.innerHTML =
+            '<option value="">Select audio input device...</option>';
+
+          audioInputs.forEach((device) => {
+            console.log("Adding device:", device.label, device.deviceId);
+            const option = document.createElement("option");
+            option.value = device.deviceId;
+            option.text = device.label || `Microphone ${select.length}`;
+            select.appendChild(option);
+          });
+
+          if (audioInputs.length === 0) {
+            console.log("No audio input devices found");
+            updateStatus("No audio input devices found", true);
+          } else {
+            console.log(`Found ${audioInputs.length} audio input devices`);
+            updateStatus(`Found ${audioInputs.length} audio input devices`);
+          }
+        } catch (error) {
+          console.error("Error accessing microphone:", error);
+          updateStatus("Error accessing microphone: " + error.message, true);
+        }
+      }
+
+      // Add a button to manually refresh devices
+      document.body.insertAdjacentHTML(
+        "afterbegin",
+        `
+        <button id="refreshDevices" style="margin-bottom: 1rem;">Refresh Microphone List</button>
+      `
+      );
+
+      document.getElementById("refreshDevices").onclick = async () => {
+        console.log("Manually refreshing device list...");
+        await populateDeviceList();
+      };
+
+      // Call this when the page loads
+      document.getElementById("startButton").onclick = async () => {
+        try {
+          // First populate devices if not already done
+          if (document.getElementById("deviceSelect").options.length <= 1) {
+            await populateDeviceList();
+          }
+
+          const useKrisp = document.getElementById("useKrisp").checked;
+
+          socket = new WebSocket("ws://localhost:3001");
+
+          socket.onopen = () => {
+            updateStatus("Connected to server");
+            // Request to start audio stream
+            socket.send(
+              JSON.stringify({
+                type: "start_stream",
+                useKrisp: useKrisp,
+              })
+            );
+          };
+
+          socket.onmessage = async (event) => {
+            const message = JSON.parse(event.data);
+
+            switch (message.type) {
+              case "stream_started":
+                streamId = message.streamId;
+                updateStatus("Audio stream started");
+
+                if (!useKrisp) {
+                  try {
+                    await startMicrophoneCapture();
+                  } catch (error) {
+                    updateStatus(error.message, true);
+                    socket.close();
+                    return;
+                  }
+                }
+
+                document.getElementById("startButton").disabled = true;
+                document.getElementById("stopButton").disabled = false;
+                document.getElementById("deviceSelect").disabled = true;
+                document.getElementById("useKrisp").disabled = true;
+                break;
+
+              case "transcription":
+                document.getElementById("transcript").textContent =
+                  message.text;
+                break;
+
+              case "error":
+                updateStatus(message.message, true);
+                break;
+
+              case "audio_data":
+                // Forward the audio data to the server for transcription
+                socket.send(
+                  JSON.stringify({
+                    type: "audio_data",
+                    data: message.data,
+                  })
+                );
+                break;
+            }
+          };
+
+          socket.onerror = (error) => {
+            updateStatus("WebSocket error: " + error.message, true);
+          };
+
+          socket.onclose = () => {
+            stopMicrophoneCapture();
+            updateStatus("Disconnected from server");
+            document.getElementById("startButton").disabled = false;
+            document.getElementById("stopButton").disabled = true;
+            document.getElementById("deviceSelect").disabled = false;
+            document.getElementById("useKrisp").disabled = false;
+          };
+        } catch (error) {
+          updateStatus("Error: " + error.message, true);
+        }
+      };
+
+      document.getElementById("stopButton").onclick = () => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "stop_stream" }));
+        }
+        stopMicrophoneCapture();
+        if (socket) {
+          socket.close();
+        }
+      };
+
+      function updateStatus(message, isError = false) {
+        const status = document.getElementById("status");
+        status.textContent = message;
+        status.className = `status ${isError ? "error" : "success"}`;
+      }
+
+      async function startMicrophoneCapture() {
+        const deviceId = document.getElementById("deviceSelect").value;
+        if (!deviceId) {
+          throw new Error("Please select an audio input device");
+        }
+
+        try {
+          updateStatus("Requesting microphone access...");
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              deviceId: { exact: deviceId },
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
+          });
+          updateStatus("Microphone access granted");
+
+          audioContext = new (window.AudioContext ||
+            window.webkitAudioContext)();
+          source = audioContext.createMediaStreamSource(mediaStream);
+          processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+
+          let silenceCounter = 0;
+          let lastAudioLevel = 0;
+
+          processor.onaudioprocess = (e) => {
+            const input = e.inputBuffer.getChannelData(0);
+            const int16 = new Int16Array(input.length);
+
+            // Calculate audio level for debugging
+            let sum = 0;
+            for (let i = 0; i < input.length; i++) {
+              sum += Math.abs(input[i]);
+              int16[i] = input[i] * 0x7fff;
+            }
+            const audioLevel = sum / input.length;
+
+            // Only send if we detect actual audio
+            if (audioLevel > 0.01) {
+              silenceCounter = 0;
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(
+                  JSON.stringify({
+                    type: "audio_data",
+                    data: int16,
+                  })
+                );
+              }
+            } else {
+              silenceCounter++;
+              // Log every 100 silent frames
+              if (silenceCounter % 100 === 0) {
+                console.log("No audio detected...");
+              }
+            }
+
+            // Log significant changes in audio level
+            if (Math.abs(audioLevel - lastAudioLevel) > 0.1) {
+              console.log("Audio level:", audioLevel);
+              lastAudioLevel = audioLevel;
+            }
+          };
+
+          // Log when audio processing starts
+          console.log("Audio processing started");
+          updateStatus("Audio capture active");
+        } catch (error) {
+          console.error("Error starting microphone:", error);
+          updateStatus("Error accessing microphone: " + error.message, true);
+          throw error;
+        }
+      }
+
+      function stopMicrophoneCapture() {
+        if (processor) processor.disconnect();
+        if (source) source.disconnect();
+        if (audioContext) audioContext.close();
+        if (mediaStream) {
+          mediaStream.getTracks().forEach((track) => track.stop());
+        }
+      }
+    </script>
+  </body>
+</html>
