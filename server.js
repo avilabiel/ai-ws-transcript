@@ -65,6 +65,43 @@ function createWavHeader(dataLength) {
   return buffer;
 }
 
+// Function to analyze technical correctness
+async function analyzeTechnicalCorrectness(text) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a technical expert. Analyze if the following statement is technically correct. Consider programming, computer science, and technical concepts. Respond with only 'CORRECT' or 'INCORRECT' followed by a brief explanation.",
+        },
+        {
+          role: "user",
+          content: text,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 150,
+    });
+
+    const result = response.choices[0].message.content;
+    const isCorrect = result.startsWith("CORRECT");
+    const explanation = result.split("\n")[1] || "";
+
+    return {
+      isCorrect,
+      explanation,
+    };
+  } catch (error) {
+    console.error("Error analyzing technical correctness:", error);
+    return {
+      isCorrect: null,
+      explanation: "Error analyzing technical correctness",
+    };
+  }
+}
+
 // Function to transcribe audio
 async function transcribeAudio(audioBuffer, ws) {
   if (audioBuffer.length === 0) return;
@@ -77,22 +114,30 @@ async function transcribeAudio(audioBuffer, ws) {
   const wavFile = Buffer.concat([wavHeader, combined]);
 
   const audioPath = "./temp.wav";
-  fs.writeFileSync(audioPath, wavFile);
 
   try {
+    // Write the file
+    fs.writeFileSync(audioPath, wavFile);
+
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(audioPath),
       model: "whisper-1",
     });
     console.log("[📝] Transcription result:", result);
 
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({
-          type: "transcription",
-          text: result.text || "[No transcription]",
-        })
-      );
+    if (result.text && result.text.trim()) {
+      // Analyze technical correctness
+      const analysis = await analyzeTechnicalCorrectness(result.text);
+
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "transcription",
+            text: result.text || "[No transcription]",
+            technicalAnalysis: analysis,
+          })
+        );
+      }
     }
   } catch (error) {
     console.error("[❌] Transcription error:", error);
@@ -105,7 +150,14 @@ async function transcribeAudio(audioBuffer, ws) {
       );
     }
   } finally {
-    fs.unlinkSync(audioPath);
+    // Safely delete the temporary file
+    try {
+      if (fs.existsSync(audioPath)) {
+        fs.unlinkSync(audioPath);
+      }
+    } catch (cleanupError) {
+      console.error("[⚠️] Error cleaning up temporary file:", cleanupError);
+    }
   }
 }
 

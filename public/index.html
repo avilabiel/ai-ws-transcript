@@ -97,6 +97,38 @@
         text-align: center;
         animation: pulse 1.5s infinite;
       }
+      .technical-indicator {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 1rem 2rem;
+        border-radius: 8px;
+        font-size: 1.5rem;
+        font-weight: bold;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transition: all 0.3s ease;
+        z-index: 1000;
+        min-width: 300px;
+      }
+      .technical-correct {
+        background: #28a745;
+        color: white;
+      }
+      .technical-incorrect {
+        background: #dc3545;
+        color: white;
+      }
+      .technical-unknown {
+        background: #6c757d;
+        color: white;
+      }
+      .technical-explanation {
+        font-size: 1rem;
+        margin-top: 0.5rem;
+        font-weight: normal;
+        opacity: 0.9;
+      }
       @keyframes pulse {
         0% {
           opacity: 1;
@@ -111,6 +143,10 @@
     </style>
   </head>
   <body>
+    <div id="technicalIndicator" class="technical-indicator technical-unknown">
+      <div>Technical Analysis</div>
+      <div class="technical-explanation">Waiting for speech...</div>
+    </div>
     <h1>Live Audio Transcription</h1>
     <div class="controls">
       <div id="micControls">
@@ -246,6 +282,32 @@
                   transcript.textContent = message.text;
                 } else {
                   transcript.textContent += " " + message.text;
+                }
+
+                // Update technical indicator
+                if (message.technicalAnalysis) {
+                  const indicator =
+                    document.getElementById("technicalIndicator");
+                  const explanation = document.querySelector(
+                    ".technical-explanation"
+                  );
+
+                  if (message.technicalAnalysis.isCorrect === null) {
+                    indicator.className =
+                      "technical-indicator technical-unknown";
+                    indicator.innerHTML = "<div>Technical Analysis</div>";
+                    explanation.textContent =
+                      "Error analyzing technical correctness";
+                  } else {
+                    indicator.className = `technical-indicator technical-${
+                      message.technicalAnalysis.isCorrect
+                        ? "correct"
+                        : "incorrect"
+                    }`;
+                    indicator.innerHTML = "<div>Technical Analysis</div>";
+                    explanation.textContent =
+                      message.technicalAnalysis.explanation;
+                  }
                 }
                 break;
 
