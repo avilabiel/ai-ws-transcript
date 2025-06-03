@@ -101,7 +101,7 @@ wss.on("connection", function connection(ws) {
           ws.send(JSON.stringify({ type: "stream_started" }));
         }
       } else if (message.type === "audio_data") {
-        audioBuffer.push(Buffer.from(message.data));
+        audioBuffer.push(Buffer.from(new Int16Array(message.data).buffer));
       } else if (message.type === "stop_stream") {
         if (streamId && isKrispAvailable) {
           try {
