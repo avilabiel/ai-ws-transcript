@@ -3,30 +3,65 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Krisp Meeting Transcriber</title>
+    <title>Live Audio Transcription</title>
     <style>
       body {
         font-family: sans-serif;
         padding: 2rem;
         background: #f8f9fa;
+        max-width: 800px;
+        margin: 0 auto;
       }
       #transcript {
         white-space: pre-wrap;
         margin-top: 1rem;
-        background: #e9ecef;
-        padding: 1rem;
+        background: #fff;
+        padding: 1.5rem;
         border-radius: 8px;
         font-size: 1.1rem;
+        min-height: 200px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        border: 1px solid #dee2e6;
       }
       button {
-        padding: 0.6rem 1rem;
+        padding: 0.8rem 1.5rem;
         font-size: 1rem;
         margin-right: 1rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+      #startButton {
+        background: #28a745;
+        color: white;
+      }
+      #startButton:hover {
+        background: #218838;
+      }
+      #stopButton {
+        background: #dc3545;
+        color: white;
+      }
+      #stopButton:hover {
+        background: #c82333;
+      }
+      #refreshDevices {
+        background: #6c757d;
+        color: white;
+      }
+      #refreshDevices:hover {
+        background: #5a6268;
+      }
+      button:disabled {
+        background: #6c757d;
+        cursor: not-allowed;
       }
       .status {
         margin: 1rem 0;
-        padding: 0.5rem;
+        padding: 0.8rem;
         border-radius: 4px;
+        font-weight: 500;
       }
       .error {
         background: #ffebee;
@@ -38,30 +73,46 @@
       }
       .controls {
         margin: 1rem 0;
-        padding: 1rem;
+        padding: 1.5rem;
         background: #fff;
         border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
       select {
-        padding: 0.5rem;
+        padding: 0.8rem;
         margin: 0.5rem 0;
-        width: 300px;
+        width: 100%;
+        max-width: 400px;
+        border: 1px solid #ced4da;
+        border-radius: 4px;
+        font-size: 1rem;
       }
-      .toggle {
+      .recording-indicator {
+        display: none;
         margin: 1rem 0;
+        padding: 0.5rem;
+        background: #dc3545;
+        color: white;
+        border-radius: 4px;
+        text-align: center;
+        animation: pulse 1.5s infinite;
+      }
+      @keyframes pulse {
+        0% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+        100% {
+          opacity: 1;
+        }
       }
     </style>
   </head>
   <body>
-    <h1>Audio Transcription</h1>
+    <h1>Live Audio Transcription</h1>
     <div class="controls">
-      <div class="toggle">
-        <label>
-          <input type="checkbox" id="useKrisp" />
-          Use Krisp SDK (if available)
-        </label>
-      </div>
       <div id="micControls">
         <select id="deviceSelect">
           <option value="">Select audio input device...</option>
@@ -69,13 +120,13 @@
       </div>
     </div>
     <div id="status" class="status">Waiting to connect...</div>
+    <div id="recordingIndicator" class="recording-indicator">Recording...</div>
     <button id="startButton">Start Transcription</button>
     <button id="stopButton" disabled>Stop</button>
     <div id="transcript">Waiting for audio...</div>
 
     <script>
       let socket;
-      let streamId = null;
       let audioContext;
       let source;
       let processor;
@@ -154,8 +205,6 @@
             await populateDeviceList();
           }
 
-          const useKrisp = document.getElementById("useKrisp").checked;
-
           socket = new WebSocket("ws://localhost:3001");
 
           socket.onopen = () => {
@@ -164,52 +213,44 @@
             socket.send(
               JSON.stringify({
                 type: "start_stream",
-                useKrisp: useKrisp,
               })
             );
           };
 
           socket.onmessage = async (event) => {
             const message = JSON.parse(event.data);
+            console.log("Received from server:", message);
 
             switch (message.type) {
               case "stream_started":
-                streamId = message.streamId;
                 updateStatus("Audio stream started");
-
-                if (!useKrisp) {
-                  try {
-                    await startMicrophoneCapture();
-                  } catch (error) {
-                    updateStatus(error.message, true);
-                    socket.close();
-                    return;
-                  }
+                try {
+                  await startMicrophoneCapture();
+                  document.getElementById("recordingIndicator").style.display =
+                    "block";
+                } catch (error) {
+                  updateStatus(error.message, true);
+                  socket.close();
+                  return;
                 }
 
                 document.getElementById("startButton").disabled = true;
                 document.getElementById("stopButton").disabled = false;
                 document.getElementById("deviceSelect").disabled = true;
-                document.getElementById("useKrisp").disabled = true;
                 break;
 
               case "transcription":
-                document.getElementById("transcript").textContent =
-                  message.text;
+                console.log("Transcription received:", message.text);
+                const transcript = document.getElementById("transcript");
+                if (transcript.textContent === "Waiting for audio...") {
+                  transcript.textContent = message.text;
+                } else {
+                  transcript.textContent += " " + message.text;
+                }
                 break;
 
               case "error":
                 updateStatus(message.message, true);
-                break;
-
-              case "audio_data":
-                // Forward the audio data to the server for transcription
-                socket.send(
-                  JSON.stringify({
-                    type: "audio_data",
-                    data: message.data,
-                  })
-                );
                 break;
             }
           };
@@ -221,10 +262,11 @@
           socket.onclose = () => {
             stopMicrophoneCapture();
             updateStatus("Disconnected from server");
+            document.getElementById("recordingIndicator").style.display =
+              "none";
             document.getElementById("startButton").disabled = false;
             document.getElementById("stopButton").disabled = true;
             document.getElementById("deviceSelect").disabled = false;
-            document.getElementById("useKrisp").disabled = false;
           };
         } catch (error) {
           updateStatus("Error: " + error.message, true);
@@ -248,88 +290,69 @@
       }
 
       async function startMicrophoneCapture() {
-        const deviceId = document.getElementById("deviceSelect").value;
-        if (!deviceId) {
-          throw new Error("Please select an audio input device");
-        }
-
         try {
-          updateStatus("Requesting microphone access...");
+          const deviceId = document.getElementById("deviceSelect").value;
+          if (!deviceId) {
+            throw new Error("Please select an audio input device");
+          }
+
           mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: {
-              deviceId: { exact: deviceId },
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
+              deviceId: deviceId,
+              sampleRate: 16000,
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
             },
           });
-          updateStatus("Microphone access granted");
 
-          audioContext = new (window.AudioContext ||
-            window.webkitAudioContext)();
+          audioContext = new AudioContext({
+            sampleRate: 16000,
+          });
           source = audioContext.createMediaStreamSource(mediaStream);
           processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-          source.connect(processor);
-          processor.connect(audioContext.destination);
-
-          let silenceCounter = 0;
-          let lastAudioLevel = 0;
-
           processor.onaudioprocess = (e) => {
-            const input = e.inputBuffer.getChannelData(0);
-            const int16 = new Int16Array(input.length);
-
-            // Calculate audio level for debugging
-            let sum = 0;
-            for (let i = 0; i < input.length; i++) {
-              sum += Math.abs(input[i]);
-              int16[i] = input[i] * 0x7fff;
-            }
-            const audioLevel = sum / input.length;
-
-            // Only send if we detect actual audio
-            if (audioLevel > 0.01) {
-              silenceCounter = 0;
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(
-                  JSON.stringify({
-                    type: "audio_data",
-                    data: int16,
-                  })
-                );
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              const inputData = e.inputBuffer.getChannelData(0);
+              // Convert Float32Array to Int16Array
+              const pcmData = new Int16Array(inputData.length);
+              for (let i = 0; i < inputData.length; i++) {
+                pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7fff;
               }
-            } else {
-              silenceCounter++;
-              // Log every 100 silent frames
-              if (silenceCounter % 100 === 0) {
-                console.log("No audio detected...");
-              }
-            }
-
-            // Log significant changes in audio level
-            if (Math.abs(audioLevel - lastAudioLevel) > 0.1) {
-              console.log("Audio level:", audioLevel);
-              lastAudioLevel = audioLevel;
+              socket.send(
+                JSON.stringify({
+                  type: "audio_data",
+                  data: Array.from(pcmData),
+                })
+              );
             }
           };
 
-          // Log when audio processing starts
-          console.log("Audio processing started");
-          updateStatus("Audio capture active");
+          source.connect(processor);
+          processor.connect(audioContext.destination);
         } catch (error) {
-          console.error("Error starting microphone:", error);
-          updateStatus("Error accessing microphone: " + error.message, true);
+          console.error("Error starting microphone capture:", error);
           throw error;
         }
       }
 
       function stopMicrophoneCapture() {
-        if (processor) processor.disconnect();
-        if (source) source.disconnect();
-        if (audioContext) audioContext.close();
+        if (processor) {
+          processor.disconnect();
+          processor = null;
+        }
+        if (source) {
+          source.disconnect();
+          source = null;
+        }
         if (mediaStream) {
           mediaStream.getTracks().forEach((track) => track.stop());
+          mediaStream = null;
+        }
+        if (audioContext) {
+          audioContext.close();
+          audioContext = null;
         }
       }
     </script>
